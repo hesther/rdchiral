@@ -425,4 +425,83 @@ def restore_bond_stereo_to_sp2_atom(a, bond_dirs_by_mapnum):
                             bond_to_spec.SetBondDir(bond_dir)
                         return True 
 
+    return False 
+
+def correct_conjugated(initial_bond_dirs, outcome):
+    '''Checks whether the copying over of single-bond directions (ENDUPRIGHT, ENDDOWNRIGHT) was
+    corrupted for a conjugated system, where parts of the directions were specified by the template
+    and parts were copied from the reactants.
+    Args:
+        initial_bond_dirs - dictionary of (begin_mapnum, end_mapnum): bond_dir
+            that defines if a bond is ENDUPRIGHT or ENDDOWNRIGHT. The reverse
+            key is also included with the reverse bond direction. If the source
+            molecule did not have a specified chirality at this double bond, then
+            the mapnum tuples will be missing from the dict
+        outcome (rdkit.Chem.rdChem.Mol): RDKit molecule
+    Returns:
+        bool: Returns True if a conjugated system was corrected
+    '''
+
+    final_bond_dirs=bond_dirs_by_mapnum(outcome)
+    conjugated=[]
+    for b in outcome.GetBonds():
+        if b.GetIsConjugated():
+            conjugated.append((b.GetBeginAtom().GetAtomMapNum(), b.GetEndAtom().GetAtomMapNum()))
+            conjugated.append((b.GetEndAtom().GetAtomMapNum(), b.GetBeginAtom().GetAtomMapNum()))
+
+    need_to_change_dirs={}
+    inverted_dirs = []
+    new_dirs = []
+    for pair in final_bond_dirs:
+        if pair in initial_bond_dirs:
+            if final_bond_dirs[pair] != initial_bond_dirs[pair]:
+                need_to_change_dirs[pair] = initial_bond_dirs[pair]
+                inverted_dirs.append(pair)
+        else:
+            new_dirs.append(pair)
+
+    for pair in new_dirs:
+        if is_conjugated_to(pair,inverted_dirs,conjugated):
+            need_to_change_dirs[pair] = BondDirOpposite[final_bond_dirs[pair]]
+
+    changed = False
+    for b in outcome.GetBonds():
+        bam = b.GetBeginAtom().GetAtomMapNum()
+        bbm = b.GetEndAtom().GetAtomMapNum()
+        if (bam,bbm) in need_to_change_dirs:
+            b.SetBondDir(need_to_change_dirs[(bam,bbm)])
+            changed = True
+            
+    return changed
+   
+
+def is_conjugated_to(pair,inverted_dirs,conjugated):
+    '''Checks whether a given pair of map numbers from a bond is
+    conjugated to a set of map numbers (bonds in the template that were inverted).
+    Args:
+        pair: pair of atom map numbers of a bond
+        inverted_dirs: list of pairs of atom map numbers of bonds whose directions
+            were inverted compared to the reactants
+        conjugated: list of bonds that are conjugated according to rdkit
+    Returns:
+        bool: Returns True if there exists a path of conjugated bonds from pair to any bond in inverted_dirs
+    '''
+    start_atoms=set(pair)
+    end_atoms=set([a for b in inverted_dirs for a in b])
+
+    add=start_atoms
+    ctr=0
+    while len(add)!=0 and ctr<1000:
+        add=set()
+        for a in start_atoms:
+            for c in conjugated:
+                if a in c:
+                    if c[0] not in start_atoms:
+                        add.add(c[0])
+                    if c[1] not in start_atoms:
+                        add.add(c[1])
+        if bool(set(add) & set(end_atoms)):
+            return True
+        [start_atoms.add(x) for x in add]
+        ctr+=1
     return False
